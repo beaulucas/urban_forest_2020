@@ -1,0 +1,13 @@
+h1,h2,h3,h4,h5,h6{
+  font-weight: bolder
+}
+
+h1 {
+  color: #55ACEE
+}
+h2 {
+  color: #292F33
+}
+h3 {
+  color: #66757F
+}

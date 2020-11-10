@@ -1,24 +1,30 @@
 ---
 title: 'Finding the ideal urban forest'
-author: "Beau Lucas"
 output:
   html_document:
+    css: style.css
     toc: true
-    toc_float: false
-    toc_depth: 2
+    toc_float: true
+    toc_collapsed: true
+toc_depth: 3
+number_sections: true
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.asp = 0.618, fig.width = 7)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.asp = 0.618, fig.width = 6, fig.align='center')
 # options(device = "X11")
 ```
 
 ```{r}
 library(foreign)
+library(readr)
 library(dplyr)
 library(ggplot2)
 library(sf)
 library(kableExtra)
+library(patchwork)
+library(ggridges)
+library(maps)
 rogue::theme_mopub()
 
 # add kable styling theme
@@ -58,39 +64,69 @@ states_shp <- states_shp_raw %>%
     prop_forest = tforest / lndrasar
   )
 county_shp <- county_shp_raw %>%
-  mutate(prop_developed = tdevelop / lndrasar,
-         prop_forest = tforest / lndrasar)
+  rename(`county` = name00) %>%
+  inner_join(states_dbf %>% select(stfips, name00), by = c("stfips")) %>%
+  mutate(
+    prop_developed = tdevelop / lndrasar,
+    prop_forest = tforest / lndrasar
+  )
+
+county_dbf <- county_dbf_raw %>%
+  rename(`county` = name00) %>%
+  inner_join(states_dbf %>% select(stfips, name00), by = c("stfips")) %>%
+  mutate(
+    prop_developed = tdevelop / lndrasar,
+    prop_forest = tforest / lndrasar,
+    prop_devcan = devcan / tdevelop
+  )
+
+state_pop_stats <- county_shp %>%
+  group_by(name00) %>%
+  arrange(desc(pop2000)) %>%
+  mutate(
+    cumsum_pop = cumsum(pop2000),
+    cumprop_pop = cumsum_pop / sum(pop2000)
+  ) %>%
+  mutate(
+    populated = if_else(cumprop_pop <= 0.50, TRUE, FALSE),
+  ) %>%
+  ungroup()
+
+state_pop_stats_dbf <- county_dbf %>%
+  group_by(name00) %>%
+  arrange(desc(pop2000)) %>%
+  mutate(
+    cumsum_pop = cumsum(pop2000),
+    cumprop_pop = cumsum_pop / sum(pop2000)
+  ) %>%
+  mutate(
+    populated = if_else(cumprop_pop <= 0.50, TRUE, FALSE)
+  ) %>%
+  ungroup()
 ```
 
-# Context
+During a trip to Moscow last summer, the most pleasant surprise was the dense, green urban forest that drapes its neighborhoods. With Moscow being one of the largest, densest megacities in the world, I certainly didn't expect this.
 
-I decided to explore the topic of urban forests for a few reasons:
+Moscow's urban forest is made possible by two components:
 
-1. Curiosity around the quality and depth of .gov datasets. Thus far, I am impressed.
-2. The beautiful maps I've seen on #Rstats twitter lately, including work done by folks at [r-spatial](https://www.r-spatial.org/r/2018/10/25/ggplot2-sf.html) and others
-3. Personal motivation in exploring my long-term moving options
+1. Dense living
+2. **Open space between buildings**
+
+Number two is something I personally haven't seen in any other cities, particularly in the U.S. While the majority of the population lives in 5+ story apartments, there exists significant, open space between buildings. In this space exists pedestrian walkways, playgrounds, schools, and a [**dense, car-free urban forest**](http://www.slavictravels.com/moscow-renovation-program/). It's quite astounding the level of serenity and greenspace that can be achieved in a neighborhood just minutes away from one the densest subway systems in the world.
 
 -----
 
-# What is an urban forest?
+![](moscow_playground.jpg "Playground in between apartments. Credit slavictravels.com"){ width=33% }![](moscow_apt.jpg "Moscow apartment. Credit slavictravels.com"){ width=33% }![](moscow_walkway.jpg "Walkway in between apartments. Credit slavictravels.com"){ width=33% }
 
-Urban forests are areas of developed land that have ample greenspace and/or tree canopies. 
+-----
 
-This analysis uses USDA land data to find out which states and metropolitan areas in the US showcase the best urban forests.
+While not every district in Moscow looks like this, the images above are quite common for most parts of Northern Moscow.
 
-### Benefits of urban forests
+After a bit of research, I wasn't surprised that [**Moscow ranks first of all megacities in terms of urban forest coverage**](https://www.researchgate.net/figure/Tree-canopy-area-in-each-megacity-showing-existing-cover-and-potential-cover-in-a_fig1_318779295). 
 
-```{r}
-# TODO 
-```
+Since this trip, I've wanted to know if any urban areas in the US have a comparable amount of greenspace. As of writing this post, I live in a Bay Area suburb (Walnut Creek, if familiar). To those who are familiar, the Bay Area is an outstanding place if one is interested in nature. I have at my fingertips an almost endless amount of hiking, trails, and other regional parks. Despite this, I still felt more connected to nature during my three weeks living in a Moscow apartment. While there a number of short drives that lead to an abundance of hiking and open space, **the areas that I live and work in are mostly concrete.**
 
-My idea of an urban forest is a state that exhibits the following properties:
-
-- **Ample greenspace.** The state should contain large swaths of undeveloped land. This could take the form of mountains, forests, trails, etc. I need to be able to escape into large swaths of greenspace without driving half the day.
-
-- **Canopies on developed land.** Suburban and urban areas should also be green. I don't want the [heat island effect](https://en.wikipedia.org/wiki/Urban_heat_island) effect, and want to feel more connected with nature where I live and work. California fails at this, as the majority of suburbs are concrete-dominant. Those that aren't are either far away from jobs (think remote Northern California) and/or wildfire risks. 
-
-- **Reasonably, but not overly developed.** It should be easy to find a high-paying job, economy should be stable, and proximity to modern amenities should be seamless. This makes it urban.
+While I don't want to relocate to Moscow, I do want to live and work in places that are *green*. I also value the "outdoorsy" feel of the Bay Area, so having nature activities in proximity to f where I live and work is also important. In this analysis, I will try to identify if I can find anything comparable in the US.
 
 -----
 
@@ -98,152 +134,148 @@ My idea of an urban forest is a state that exhibits the following properties:
 
 This dataset is provided for free by the the [Northern Research Station of the USDA Forest Service](https://www.nrs.fs.fed.us/).
 
-The data includes urban forest data with respect to the contiguous United States. The data was collected via *"...top-down aerial approaches and bottom-up field data collection"* as part of the [Resource Planning Act](https://www.fs.fed.us/research/rpa/).
-
-Data is available at the state, county, and county sub-division level. The data consists of CSVs as well as GIS shapefiles.
+The data includes urban forest data with respect to the contiguous United States. The data was collected via *"...top-down aerial approaches and bottom-up field data collection"* as part of the [Resource Planning Act](https://www.fs.fed.us/research/rpa/). Data is available at the state, county, and county sub-division level. The data consists of CSVs as well as GIS shapefiles.
 
 A link to downloading the dataset can be found [here](https://www.nrs.fs.fed.us/data/urban/). To better understand the fields included in the data, there is also a helpful [metadata text file](https://www.nrs.fs.fed.us/data/urban/local-resources/documents/metasdata_shp.txt).
 
 -----
 
-## Ample greenspace
+## What is an urban forest?
 
-The first thing I want to do is filter out states that lack forested land. To me, ample greenspace is satisfied when the state has a large percentage of forest coverage combined with a large total area of forested land.
+Urban forests are areas of developed land that have ample greenspace and/or tree canopies. 
 
-### Forest coverage
-
-Looking at forest coverage, the first thing that pops out is the amount of forested land on the east coast compared to the west. To be fair, looking at the state level can penalize certain states that exhibit a wide variance in biomes. Judging `California` purely from this map, it would be difficult to realize that is the largest area of forested land in the contiguous United States.
+## Urban forests in USA cities
 
 ```{r}
-# scale_fc("#EED5B7", "#228B22", "#C1CDCD")
-# TODO fix color coding
-# TODO move fill scale to top
-states_shp %>%
-  #mutate(prop_forest = if_else(prop_forest < 0.2, NA_real_, prop_forest)) %>%
-  ggplot() +
-  geom_sf(aes(fill = prop_forest)) +
-  scale_fill_gradient(low = "#EED5B7", high = "#228B22") +
-  #scale_fill_viridis_c(end = 0.7) +
-  labs(title = "The East Coast is draped in forest",
-       fill = "Forest Proportion")
 
+
+# TODO state/region mapping
+#https://www2.census.gov/geo/pdfs/maps-data/maps/reference/us_regdiv.pdf
+
+url = "https://raw.githubusercontent.com/cphalpert/census-regions/master/us%20census%20bureau%20regions%20and%20divisions.csv"
+# 9 divionsm, 4 regions
+state_region <-read_csv(url(url)) %>% janitor::clean_names()
+top_counties <- county_shp %>%
+  mutate(prop_devcan = devcan/tdevelop) %>%
+  arrange(desc(pop2000)) %>%
+  head(50)
+top_counties %>%
+  ggplot(aes(x = prop_devcan, y = 1, fill=stat(x))) +
+    geom_density_ridges_gradient(
+    jittered_points = TRUE, scale = .95, rel_min_height = .01, gradient_lwd=1.,
+    point_shape = "|", point_size = 3, size = 0.25,
+    position = position_points_jitter(height = 0)
+  ) +
+    scale_fill_gradient(low = "#EED5B7", high = "#228B22") +
+  theme_ridges(grid=FALSE) +
+  scale_x_continuous(labels=scales::percent) +
+  labs(y="",
+       x= "Developed Canopy Coverage") +
+  guides(fill=FALSE)
 ```
 
-For a quick reduction, I'm going to filter out any state with forest coverage below `20%`.
-
-#### Not Enough Forest
-
-The eleven states that missed the mark seem to be either agricultural or full of shrubland. Most of these states are in the center of country.
+### My criteria for urban forest
 
 ```{r}
-exclude_dev <- states_dbf %>%
-  filter(prop_developed >= 0.10) %>%
-  select(name00)
-
-exclude_forest <- states_dbf %>%
-  filter(prop_forest < 0.2) %>%
-  select(name00)
-
-excluded_states <- exclude_dev %>%
-  union(exclude_forest)
-
-states_dbf %>%
-  filter(prop_forest < 0.2) %>%
-  select(name00, prop_forest, prop_developed, prop_ag, prop_shrub, prop_barren) %>%
-  arrange(desc(prop_forest)) %>%
-  mutate_at(vars(contains("prop")), ~ scales::percent(., accuracy = 0.1)) %>%
-  select(`State` = name00,
-         `Prop Forest` = prop_forest,
-         `Prop Developed` = prop_developed,
-         `Prop Agriculture` = prop_ag,
-         `Prop Shrub` = prop_shrub) %>%
-  kable() %>%
-  kable_styling()
+# TODO
 ```
 
-### Total amount of forested land
+An ideal state for me is one that has a dense urban forest as well as an abundance of nature areas. I've broken it down into three qualifications:
 
-We've removed states with low forest coverage. The next thing to check for is the total forested land mass of each state. This is a proxy for the ability to hike, access to national parks, and more.
+1. **Ample greenspace**
 
-Let's take a look at the states with the highest forest coverage and see how much forested land they actually have.
+  * The state should contain large swaths of undeveloped land. This could take the form of mountains, forests, trails, etc. I need to be able to escape into large swaths of greenspace without driving half the day. The
+
+2. **Canopies on developed land**
+
+  * Suburban and urban areas should also be green. I don't want the [heat island effect](https://en.wikipedia.org/wiki/Urban_heat_island) effect, and want to feel more connected with nature where I live and work. California fails at this, as the majority of suburbs are concrete-dominant. Those that aren't are either far away from jobs (think remote Northern California) and/or wildfire risks. 
+
+3. **Reasonably, but not overly developed.**
+
+  * It should be easy to find a high-paying job, economy should be stable, and proximity to modern amenities should be seamless. This makes it urban.
+
+
+-----
+
+### Urban Forest By Region
+
+The [**Census uses a regional/divisional taxonomy**](https://www2.census.gov/geo/pdfs/maps-data/maps/reference/us_regdiv.pdf) to classify states. There are four regions: `Midwest`, `West`, `South`, and `Northeast`.
+
+For each state, let's find the counties that contribute the majority of the state's population. Then, let's measure their *developed canopy coverage*. Developed canopy coverage is the amount of canopy found on developed land.
+
+```{r urban forest by region}
+# TODO add metrics definitions higher
+region_stats <- state_pop_stats_dbf %>%
+inner_join(state_region, by = c("name00" = "state")) %>%
+  group_by(region) %>%
+  mutate(median_devcan = quantile(prop_devcan, 0.5, na.rm=TRUE))
+
+region_stats %>% select(region, median_devcan)
+
+region_stats %>%
+  ggplot(aes(x = prop_devcan, y = reorder(region, -median_devcan), fill = stat(x), colour = prop_devcan)) +
+  geom_density_ridges_gradient(scale = 1.67, rel_min_height = 0.01, gradient_lwd = 5) +
+    scale_fill_gradient(low = "#EED5B7", high = "#228B22") +
+  labs(y="",
+       x="",
+       title = "The South And Northeast Offer The Most Greenspace Within Population Centers",
+       subtitle = "Developed canopy coverage where majority of regional population resides") +
+  guides(fill=FALSE) +
+  scale_x_continuous(labels=scales::percent) +
+  theme(panel.grid.minor = element_blank())
+```
+
+We find that the `Midwest` and `West` regions have the least green population centers. This makes sense when you reference a forest coverage map for the country. However, states such as `Oregon` and `California` are known for thei
 
 ```{r}
-states_dbf %>%
-  select(name00, prop_forest, forest_area_rank, pop_den_rank, prop_developed) %>%
-  arrange(desc(prop_forest)) %>%
-  head(10) %>%
-  mutate_at(vars(contains("prop")), ~ scales::percent(., accuracy = 0.1)) %>%
-  select(`State` = name00,
-         `Prop Forest` = prop_forest,
-         `Forest Area Rank` = forest_area_rank,
-         `Population Density Rank` = pop_den_rank,
-         `Prop Developed` = prop_developed) %>%
-  kable() %>%
-  kable_styling()
+# TODO recreate https://upload.wikimedia.org/wikipedia/commons/3/38/Aboveground_Woody_Biomass_in_the_United_States_2011.jpg
 ```
 
-Outside of `Alabama` and `Pennsylvania`, none of these states crack the top 10 in terms of forest land mass. 
-
-We can visualize the difference between a state's forest coverage and how much of total US forest land the state contributes. 
+To account for larger states with diverse biomes, we can compare a state's forest coverage which how much of total U.S. forest area the state accounts for. 
 
 ```{r}
 # TODO fix plot labels and colors
-# TODO remove grid lines
 states_dbf %>%
   mutate(
     prop_developed = tdevelop / lndrasar,
     prop_forest = tforest / lndrasar,
     prop_us_forest = tforest / sum(tforest)
   ) %>%
-  ggplot(aes(x = prop_us_forest, y = prop_forest, colour = name00)) +
+  inner_join(state_region, by = c("name00" = "state")) %>%
+  ggplot(aes(x = prop_us_forest, y = prop_forest, colour = region)) +
   geom_point(size = 3) +
-  gghighlight::gghighlight((prop_forest > 0.4 & prop_us_forest < 0.01) |
-    name00 == "California") +
+ # gghighlight::gghighlight((prop_forest > 0.4 & prop_us_forest < 0.01) |
+ #   name00 == "California") +
   scale_colour_viridis_d() +
-  labs(title = "Many of the heavily forested states are small",
-       x = "State Proportion U.S. Forest Land",
-       subtitle = "Proportion of state land that is forested (y)\nversus proportion of U.S. forest state contributes (x)") +
+  labs(
+    title = "Many of the heavily forested states are small",
+    x = "% Total U.S. Forest Area",
+    y = "",
+    subtitle = "Proportion of state land that is forested (y)\nversus proportion of U.S. forest state contributes (x)",
+    colour=""
+  ) +
   scale_x_continuous(labels = scales::percent) +
-  scale_y_continuous(labels = scales::percent)
+  scale_y_continuous(labels = scales::percent) +
+  theme(panel.grid.minor = element_blank())
 ```
 
-There is a relationship between how much forest land a state has and how much US forest land the state constitutes. There are also exceptions to this. Notice the cluster of Northeastern states in the top-left quadrant. While these states are some of the most forested in the country, their small size limits their utility for those interested in the outdoors.
+Naturally, there is a clear relationship between how forested a state is and how much of total U.S. forest area it constitutes. Obviously, the size of the state is at play here. Due to wide ranges in the size of states, there are also notable exceptions to this. Notice the cluster of Northeastern states in the top-left quadrant. While these states are some of the most forested in the country, their small size limits their utility for those interested in the outdoors. Secondly, most of these states are all sandwiched inside the [**Northeast megalopolis**](https://en.wikipedia.org/wiki/Northeast_megalopolis). It's going to be quite a drive to escape into the backcountry.
 
-California, despite having the most amount of forested land in the contiguous US, barely cracks the `20%` forest threshold.
-
-Secondly, these states are all sandwiched inside the [Northeast megalopolis](https://en.wikipedia.org/wiki/Northeast_megalopolis).
+Notice how, despite the earlier chart, there are quite bit of `West` and `Midwest` states with decent forest coverage. 
 
 ## Canopies on developed land
 
-It's important that greenspace is present near places to live and work. There is [strong evidence](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5663018/) on the positive benefits greenspace has on the mental health of a population. It's important to be surrounded by greenspace without having to drive half of the day to the mountains.
+It's important that greenspace is present near places to live and work. There is [**strong evidence**](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5663018/) on the positive benefits greenspace has on the mental health of a population. It's important to be surrounded by greenspace without having to drive half of the day to the mountains.
 
-In the underlying GIS data, there is a field `tdevelop`. Examining the metadata, `tdevelop` signals the total amount of developed land. Developed land follows classes 21-24 from the schema found here:
+In the underlying GIS data, there is a field `tdevelop`, which signals the total amount of developed land. What is developed land? Developed land follows classes 21-24 from the schema found here:
 
-* [Multi-Resolution Land Characteristics Consortium](https://www.mrlc.gov/data/legends/national-land-cover-database-2011-nlcd2011-legend)
+* [**Multi-Resolution Land Characteristics Consortium**](https://www.mrlc.gov/data/legends/national-land-cover-database-2011-nlcd2011-legend)
 
-`tdevelop` thus captures a wide range of developments, from parks, single-family homes, and golf courses, all the way up to urban apartment complexes and factories. Since this is where most people will choose to live and work, measuring the amount of tree coverage in developed land is an important measure.
+From the classes defined by the MLRC, `tdevelop` thus captures a wide range of land uses. Developed land ranges from parks and single-family homes all the way to skyscrapers and factories. The dataset also contains a field `devcan`, which measures the amount of tree canopy on these developed land areas. Given that the majority of time for most people is spent on or near developed land, having ample greenspace in these areas is of utmost importance.
 
-```{r, eval = FALSE}
-# TODO show that most people live in developed land with little greenspace
-county_dbf_raw %>% select(name00, popden00, pop2000, devcan, tdevelop) %>%
-  mutate(develop_canopy_coverage = devcan / tdevelop) %>%
-  filter(pop2000 > 100000) %>%
-  ggplot(aes(x = popden00, y = develop_canopy_coverage)) +
-  geom_point()
+### Which state has the densest developed canopy?
 
-```
-
-The dataset also contains a field `devcan`, which measures the amount of tree canopy in developed land.
-
-There is a strong trend between how forested a state is and the canopy coverage on developed land, with some notable exceptions.
-
-Let's compare how much of a state's land is covered by forest versus how much of its developed land is covered in canopy.
-
-Notice the strong linear relationship between the two variables. I'm interested in filtering out states that have less than "expected" levels of developed canopy.
-
-### Predicting developed canopy
-
-Just for fun, let's fit a simple linear regression to determine which states exhibit less developed canopy than expected.
+Not surprisingly, there is a strong relationship between how forested a state is and the canopy coverage on its developed land, albeit with some notable exceptions. I've highlighted those that deviate from this pattern.
 
 ```{r}
 # TODO clean up tibble logic
@@ -251,7 +283,6 @@ lm_canopy <- states_dbf %>%
   select(name00, prop_devcanopy, prop_forest) %>%
   filter(prop_forest > 0.2) %>%
   lm(data = ., prop_devcanopy ~ prop_forest)
-
 
 canopy_fitted <- broom::augment(lm_canopy, data = states_dbf %>%
   select(name00, prop_devcanopy, prop_forest) %>%
@@ -267,8 +298,8 @@ states_dbf %>%
   select(name00, prop_devcanopy, prop_forest) %>%
   left_join(canopy_fitted, by = c("name00" = "name00")) %>%
   ggplot(aes(x = prop_forest, y = prop_devcanopy)) +
-  geom_rect(aes(xmin = 0, xmax = 0.2, ymin = 0, ymax = 0.1), alpha = 1 / 100, colour = "#EE3B3B", fill = "#EE3B3B") +
-  geom_line(aes(x = prop_forest, y = .fitted), colour = "#838B8B", linetype = "dashed") +
+  #geom_rect(aes(xmin = 0, xmax = 0.2, ymin = 0, ymax = 0.1), alpha = 1 / 100, colour = "#EE3B3B", fill = "#EE3B3B") +
+ # geom_line(aes(x = prop_forest, y = .fitted), colour = "#838B8B", linetype = "dashed") +
   geom_point(size = 3) +
   gghighlight::gghighlight(n = 1, max_highlight = 1, .resid < -0.06 | name00 == "California" | .resid > 0.08, label_key = name00) +
 
@@ -276,131 +307,51 @@ states_dbf %>%
     title = "Several high-forested states lack greenspace on developed land",
     subtitle = "How forested a state is versus how forested their developed land is",
     x = "State Forest Percentage",
-    y = "Canopy Rate on Developed Land"
+    y = "Developed Canopy Coverage"
   ) +
   scale_x_continuous(labels = scales::percent) +
   scale_y_continuous(labels = scales::percent)
 ```
 
-`Maine` and `Vermont` may be heavily forested, but their developed land is less green than less-forested states such as `Georgia` and `Mississippi`.
+This proves that greenspace is not purely a function of a state's natural biome. Maine, which is over `70%` forested, has less than `10%` developed canopy coverage. Georgia, which is less than `50%` forested, boasts a developed canopy coverage close to `30%`.
 
-#### Developed Canopy vs. Total Canopy
+### Maine vs. Georgia
 
-```{r}
-states_dbf %>%
-  select(name00, devcan, canopy, tdevelop, lndrasar) %>%
-  mutate(
-    devcan_area_density = devcan / tdevelop,
-    devcan_lndrasar_density = devcan / lndrasar,
-    canopy_devcan_ratio = canopy / devcan,
-    canopy_lndrasar_density = canopy / lndrasar
-  ) %>%
-  arrange(desc(devcan_area_density)) %>%
-  ggplot(aes(x = devcan_area_density, y = canopy, colour = name00)) +
-  geom_point() +
-  gghighlight::gghighlight(
-    canopy > 70000000000 | devcan_area_density > 0.25
-  ) +
-  geom_point(aes(size = devcan), pch = 21) +
-  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
-  scale_y_continuous(labels = scales:::number_format(scale = 1 / 1000000000, accuracy = 1)) +
-  labs(
-    x = "Developed Canopy Coverage",
-    y = "Total Canopy"
-  ) +
-  scale_colour_viridis_d(option = "A") +
-  guides(size = FALSE)
-```
-
-
-We've now established two filters:
-
-* Forest `>=20%` of land mass
-* Developed canopy better than average
-
------
-
-## Reasonably, but not overly developed
-
-A key part of the urban forest is the *urban* factor. We can measure this by looking at county-level demographics of forested states wi
-
-* For myself, development cutoff is 10%
+Let's zoom in on Maine and Georgia to see why the discrepancy between forest coverage and developed canopy exists.
 
 ```{r}
-# TODO fix ugly plot
-states_shp %>%
-  mutate(prop_developed = if_else(prop_developed > 0.1, NA_real_, prop_developed)) %>%
+
+
+
+ga_me <- county_shp %>%
+  filter(name00 %in% c("Georgia", "Maine"))
+
+gg_ga <- ga_me %>%
+  filter(name00 == "Georgia") %>%
   ggplot() +
-  geom_sf(aes(fill = prop_developed)) +
-  scale_fill_viridis_c(option = "A", begin = 0.2)
-```
+  geom_sf(aes(fill = prop_forest), lwd = 0) +
+  scale_fill_gradient(low = "#EED5B7", high = "#228B22", labels = scales::percent, breaks = c(0, 0.4, 0.8)) +
+  geom_sf(data = state_pop_stats %>%
+    filter(name00 == "Georgia", cumprop_pop <= 0.75), aes(alpha = log(prop_developed)),
+    lwd=0, colour = "#828282") +
+  guides(fill=FALSE, alpha=FALSE)
 
-
-## What's the deal with California?
-
-Most of California is undeveloped, and it has the most forest land in the contiguous US. The problem is that a lot of this land is far away from economic and population centers. Weekend trips to Tahoe from the Bay Area are extremely common, but this forest is contained into mountainous, mostly undeveloped territory. Living there with modern amenities and proximity to high-skilled tech jobs is not possible.
-
-```{r}
-cali <- county_shp_raw %>%
-  rename(`county` = name00) %>%
-  inner_join(states_dbf %>% select(stfips, name00), by = c("stfips")) %>%
-  filter(name00 %in% c("California")) %>%
-  group_by(name00) %>%
-  mutate(
-    prop_develop = tdevelop / lndrasar,
-    prop_forest = tforest / lndrasar
-  ) %>%
-  mutate(prop_develop = if_else(prop_develop < 0.05 | name00 != "California", NA_real_, prop_develop)) %>%
-  ungroup()
-```
-
-If we look at the counties where people live, we get a different story.
-
-Highlighted counties are those that contribute ~3/4 of California's population. The majority of California's forest land is highly remote.
-
-```{r}
-# TODO add brown agricultural part
-cali_stats <- cali %>%
-  arrange(desc(pop2000)) %>%
-  mutate(
-    cumsum_pop = cumsum(pop2000),
-    cumprop_pop = cumsum_pop / sum(pop2000)
-  ) %>%
-  mutate(
-    populated = if_else(cumprop_pop <= 0.75, TRUE, FALSE),
- #   prop_forest = if_else(prop_forest <= 0.1, NA_real_, prop_forest)
-  )
-
-# TODO add grey mexico
-# TODO add labelso of major cities
-# TODO make fill legend text smaller and remove plot border
-cali_stats %>%
-  select(county, pop2000, cumsum_pop, cumprop_pop, populated, prop_forest, popden00) %>%
+gg_me <- ga_me %>%
+  filter(name00 == "Maine") %>%
   ggplot() +
-  geom_sf(aes(fill = prop_forest), lwd=0) +
-  # add strong border on populated counties
-scale_fill_gradient(low = "#EED5B7", high = "#228B22", labels = scales::percent, breaks = c(0, 0.4, 0.8)) +
-    geom_sf(data = cali_stats %>%
-            filter(cumprop_pop <= 0.75), size = 1, alpha = 4 / 5, fill = "#CCCCCC", colour = "#828282") +
-  labs(
-    title = "California forests are far from population centers",
-    subtitle = "Forest coverage compared to population centers (grey)",
-    fill = "Country Forest Coverage"
-  ) +
-    geom_sf(data = states_shp %>% filter(name00 %in% c("Oregon", "Nevada", "Arizona", "Idaho"))) +
-  coord_sf(crs = st_crs(4267),
-             xlim = c(-125, -115), ylim = c(32, 43), expand = FALSE) +
-  theme(panel.background = element_rect(fill = "aliceblue"),
-        legend.position = "top")
+  geom_sf(aes(fill = prop_forest), lwd = 0) +
+  scale_fill_gradient(low = "#EED5B7", high = "#228B22", labels = scales::percent, breaks = c(0, 0.4, 0.8)) +
+  geom_sf(data = state_pop_stats%>%
+    filter(name00 == "Maine", cumprop_pop <= 0.75), aes(alpha = log(prop_developed)),
+    lwd=0, colour = "#828282") +
+  guides(fill=FALSE, alpha=FALSE)
+
+gg_ga + gg_me
 ```
 
-```{r}
-# TODO compare developed canopy of different state population centers
-```
+This map makes it obvious that Georgia is significantly more developed than Maine with noticeably less forested land. But, it doesn't explain the discrepancy between their developed canopy coverage. How does Georgia boast a developed canopy with 3x the density of Maine's?
 
-### Population Proportion vs. Land Mass
-
-Another way to compare states is to see how the spread of its population across the total land mass.
+We can see this when we drill into the counties where people actually live. For most states, a small number of counties and/or land mass houses the majority of the population.
 
 ```{r}
 
@@ -426,7 +377,9 @@ county_stats <- county_cali %>%
   select(name00, county, cumsum_pop, cumprop_pop, cumsum_area, cumprop_area)
 
 # TODO remove grid lines
-# TODO change label position
+# TODO change label position to mid point
+# TODO make grey lines lighter
+
 # rank them
 most_skewed <- county_stats %>%
   filter(cumprop_pop >= 0.95) %>%
@@ -438,18 +391,123 @@ most_skewed <- county_stats %>%
   as_tibble()
 county_stats %>%
   left_join(most_skewed %>% select(name00, rank), by = c("name00")) %>%
-  ggplot(aes(x = cumprop_pop, y = cumprop_area, colour = name00)) +
-  geom_line(size = 1.25) +
-  gghighlight::gghighlight(!is.na(rank)) +
-  geom_abline(alpha = 1/3, linetype = "dashed") + 
+  ggplot(aes(x = cumprop_pop, y = cumprop_area, group=name00)) +
+  geom_line(size = 1.25, alpha = 1/4) +
+  #gghighlight::gghighlight(!is.na(rank)) +
+  geom_abline(alpha = 1 / 3, linetype = "dashed") +
+  geom_hline(yintercept = 0.25, linetype = "dashed") +
   scale_x_continuous(labels = scales::percent) +
   scale_y_continuous(labels = scales::percent) +
   labs(
     x = "Cumulative Population %",
-    y = "Cumulative Land Area %",
-    title = "Nevada, California populations are concentrated on small area of the state"
-  )
+    title = "Most states concentrate populations into small areas",
+    subtitle = "Cumulative state population versus cumulative state area occupied") +
+  scale_colour_viridis_d() +
+  guides(fill = FALSE) 
 ```
+
+Knowing this fact, let's define a state's *population centers* as the counties that constitute at least `75%` of their total population. Then, let's compare how forested states are versus how much canopy is present in its population centers.
+
+```{r}
+# TODO make x axis labels smaller
+# TODO filter on populated counties and show distribution
+state_devcan <- state_pop_stats_dbf %>%
+  inner_join(states_dbf %>% select(name00, prop_forest), by="name00", suffix=c("", "_state")) %>%
+  mutate(prop_devcan = devcan / tdevelop,
+         plot_label = glue::glue("{name00} ({scales::percent(prop_forest_state)})"))
+state_devcan_rank = state_devcan %>% group_by(name00) %>% summarise(mean_devcan = mean(prop_devcan, na.rm=TRUE))
+state_devcan %>%
+  inner_join(state_devcan_rank) %>%
+  filter(name00 %in% c("Georgia", "Maine", "Connecticut", "Vermont", "Kentucky", "California", "Mississippi", "North Dakota")) %>%
+  ggplot(aes(x = prop_devcan)) +
+  ggridges::geom_density_ridges(aes(y=reorder(plot_label, prop_forest_state), fill = prop_forest_state), scale = 2) +
+  guides(fill=FALSE) +
+  scale_fill_gradient(low = "#EED5B7", high = "#228B22", labels = scales::percent, breaks = c(0, 0.4, 0.8)) +
+  labs(y="",
+       x = "Canopy Coverage",
+       title = "Being forested doesn't guarantee urban forests",
+       subtitle = "Developed canopy coverage across population centers\nStates ordered by forest coverage (in parentheses)") +
+  scale_x_continuous(labels = scales::percent)
+```
+
+While it is easier to produce green neighborhoods in forest biomes, this doesn't always occur. For whatever reason, Vermont, the most forested state in the country, shows urban greenspace characteristics similar to California, which has `1/3` of the forest coverage. Georgia, Mississippi, and Connecticut stand out as states with large amounts of greenspace, both developed and undeveloped.
+
+### Digging into Georgia
+
+Georgia stands out in the plot above for a number of reasons:
+
+1. Dense canopy within and surrounding population centers.
+2. Major metropolitan area in Atlanta.
+3. [**Sunshine**](https://www.nrel.gov/gis/assets/images/nsrdb-v3-ghi-2018-01.jpg)
+
+-----
+
+## The California Paradox
+
+California contains some of the largest swaths of forest land in the contiguous US. For those in tech, it has the best job market in the world. So why does it fail at producing urban forests?
+
+One problem is the distance between California's undeveloped forests and its population centers. A popular weekend destination for Bay Area residents is Tahoe. Getting there requires you to drive 3+ hours, crossing the Central Valley and battling both Bay Area and Sacramento traffic on the way. It is also an expensive hobby. While California boasts some of the best outdoor activities in the world, the distance to reach them can be far. 
+
+On the urban forest front, many California suburbs lack greenspace, particularly for those who aren't wealthy. Those that do exhibit greenspace are either:
+
+* expensive (Marin County, Moraga, Montecito, etc.)
+* isolated, far away from jobs (undeveloped, Northern parts of the state)
+* wildfire risk for 1/3 of the year
+* or any other combination of the above
+
+```{r}
+# TODO show bay area and LA counties and developed canopies
+```
+
+
+```{r}
+cali <- county_shp %>%
+  filter(name00 %in% c("California")) %>%
+  group_by(name00) %>%
+  mutate(
+    prop_develop = tdevelop / lndrasar,
+    prop_forest = tforest / lndrasar
+  ) %>%
+  mutate(prop_develop = if_else(prop_develop < 0.05 | name00 != "California", NA_real_, prop_develop)) %>%
+  ungroup()
+```
+
+We can see this when we look at California's population centers and where its forested land resides. Notice the stark contrast between California and our earlier maps of Georgia and Maine. Even in the Atlanta metro area, Georgia was surrounded by immediate greenspace. The majority of California's forest land is highly remote.
+
+```{r}
+# TODO add grey mexico
+# TODO add labelso of major cities
+# TODO make fill legend text smaller and remove plot border
+state_pop_stats %>%
+  filter(name00 == "California") %>%
+  select(county, pop2000, cumsum_pop, cumprop_pop, populated, prop_forest, popden00) %>%
+  ggplot() +
+  geom_sf(aes(fill = prop_forest), lwd = 0) +
+  scale_fill_gradient(low = "#EED5B7", high = "#228B22", labels = scales::percent, breaks = c(0, 0.4, 0.8)) +
+  geom_sf(data = state_pop_stats %>%
+    filter(name00 == "California", cumprop_pop <= 0.75), lwd=0, alpha = 3 / 5, fill = "#8A8A8A", colour = "#828282") +
+  labs(
+    title = "California forests are far from population centers",
+    subtitle = "Forest coverage compared to population centers (grey)"
+  ) +
+  geom_sf(data = states_shp %>% filter(name00 %in% c("Oregon", "Nevada", "Arizona", "Idaho", "Utah"))) +
+  # thick california border
+  geom_sf(data = states_shp %>% filter(name00 == "California"), lwd=1.2, alpha=0) +
+  coord_sf(
+    crs = st_crs(4267),
+    xlim = c(-127, -113), ylim = c(32, 43), expand = FALSE
+  ) +
+  theme(
+    panel.background = element_rect(fill = "aliceblue"),
+    legend.position = "top"
+  ) +
+  guides(fill=FALSE)
+```
+
+```{r}
+# TODO compare developed canopy of different state population centers
+```
+
 
 ## Conclusion
 
