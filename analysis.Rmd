@@ -2,12 +2,7 @@
 title: 'Finding the ideal urban forest'
 output:
   html_document:
-    css: style.css
-    toc: true
-    toc_float: true
-    toc_collapsed: true
-toc_depth: 3
-number_sections: true
+    css: style.css 
 ---
 
 ```{r setup, include=FALSE}
@@ -25,63 +20,68 @@ library(kableExtra)
 library(patchwork)
 library(ggridges)
 library(maps)
-rogue::theme_mopub()
 
 # add kable styling theme
 ```
 
 ```{r read in raw datasets}
-states_dbf_raw <- foreign::read.dbf("./data/raw/states/States.dbf")
-states_shp_raw <- sf::read_sf("./data/raw/states/States.shp")
+clean_df <- function(data) {
+  data %>% as_tibble() %>% janitor::clean_names()
+}
 
+states_dbf_raw <- foreign::read.dbf("./data/raw/states/States.dbf") %>% clean_df()
+county_dbf_raw <- foreign::read.dbf("./data/raw/county_subdiv/CtySubdiv.dbf") %>% clean_df()
+places_dbf_raw <- foreign::read.dbf("./data/raw/places/Places.dbf") %>% clean_df()
+# shape files
+states_shp_raw <- sf::read_sf("./data/raw/states/States.shp") %>% janitor::clean_names()
 county_shp_raw <- sf::read_sf("./data/raw/county_subdiv/CtySubdiv.shp") %>% janitor::clean_names()
-county_dbf_raw <- foreign::read.dbf("./data/raw/county_subdiv/CtySubdiv.dbf") %>%
-  as_tibble() %>%
-  janitor::clean_names()
 ```
 
 ```{r early cleaning}
+
+add_land_metrics <- function(data) {
+  data %>%
+    mutate(prop_developed = tdevelop / lndrasar,
+           prop_forested = tforest / lndrasar,
+           prop_barren = tbarren / lndrasar,
+           prop_shrub = tshrub / lndrasar,
+           prop_ag = tagrcltr / lndrasar,
+           prop_developed_canopy = devcan / tdevelop
+    )
+}
+
+
 states_dbf <- states_dbf_raw %>%
-  as_tibble() %>%
-  janitor::clean_names() %>%
+  rename(`state` = name00) %>%
+  add_land_metrics() %>%
   mutate(
-    prop_developed = tdevelop / lndrasar,
-    prop_forest = tforest / lndrasar,
-    prop_barren = tbarren / lndrasar,
-    prop_shrub = tshrub / lndrasar,
-    prop_ag = tagrcltr / lndrasar,
-    prop_devcanopy = devcan / tdevelop,
-    # rank stats
     forest_area_rank = dense_rank(desc(tforest)),
     pop_den_rank = dense_rank(desc(popden00)),
     pop_rank = dense_rank(desc(pop2000))
   ) %>%
-  filter(name00 != "District of Columbia")
+  filter(state != "District of Columbia")
+
+stfips_map <- states_dbf %>% distinct(state, stfips)
 states_shp <- states_shp_raw %>%
-  janitor::clean_names() %>%
+  rename(`state` = name00) %>%
   mutate(
     prop_developed = tdevelop / lndrasar,
-    prop_forest = tforest / lndrasar
+    prop_forested = tforest / lndrasar
   )
 county_shp <- county_shp_raw %>%
   rename(`county` = name00) %>%
-  inner_join(states_dbf %>% select(stfips, name00), by = c("stfips")) %>%
-  mutate(
-    prop_developed = tdevelop / lndrasar,
-    prop_forest = tforest / lndrasar
-  )
+  inner_join(stfips_map) %>%
+  add_land_metrics() %>%
+  select(state, county, everything())
 
 county_dbf <- county_dbf_raw %>%
   rename(`county` = name00) %>%
-  inner_join(states_dbf %>% select(stfips, name00), by = c("stfips")) %>%
-  mutate(
-    prop_developed = tdevelop / lndrasar,
-    prop_forest = tforest / lndrasar,
-    prop_devcan = devcan / tdevelop
-  )
+  inner_join(stfips_map) %>%
+  add_land_metrics() %>%
+  select(state, county, everything())
 
 state_pop_stats <- county_shp %>%
-  group_by(name00) %>%
+  group_by(state) %>%
   arrange(desc(pop2000)) %>%
   mutate(
     cumsum_pop = cumsum(pop2000),
@@ -93,7 +93,7 @@ state_pop_stats <- county_shp %>%
   ungroup()
 
 state_pop_stats_dbf <- county_dbf %>%
-  group_by(name00) %>%
+  group_by(state) %>%
   arrange(desc(pop2000)) %>%
   mutate(
     cumsum_pop = cumsum(pop2000),
@@ -156,11 +156,11 @@ url = "https://raw.githubusercontent.com/cphalpert/census-regions/master/us%20ce
 # 9 divionsm, 4 regions
 state_region <-read_csv(url(url)) %>% janitor::clean_names()
 top_counties <- county_shp %>%
-  mutate(prop_devcan = devcan/tdevelop) %>%
+  mutate(prop_developed_canopy = devcan/tdevelop) %>%
   arrange(desc(pop2000)) %>%
   head(50)
 top_counties %>%
-  ggplot(aes(x = prop_devcan, y = 1, fill=stat(x))) +
+  ggplot(aes(x = prop_developed_canopy, y = 1, fill=stat(x))) +
     geom_density_ridges_gradient(
     jittered_points = TRUE, scale = .95, rel_min_height = .01, gradient_lwd=1.,
     point_shape = "|", point_size = 3, size = 0.25,
@@ -206,14 +206,14 @@ For each state, let's find the counties that contribute the majority of the stat
 ```{r urban forest by region}
 # TODO add metrics definitions higher
 region_stats <- state_pop_stats_dbf %>%
-inner_join(state_region, by = c("name00" = "state")) %>%
+inner_join(state_region, by = c("state" = "state")) %>%
   group_by(region) %>%
-  mutate(median_devcan = quantile(prop_devcan, 0.5, na.rm=TRUE))
+  mutate(median_devcan = quantile(prop_developed_canopy, 0.5, na.rm=TRUE))
 
 region_stats %>% select(region, median_devcan)
 
 region_stats %>%
-  ggplot(aes(x = prop_devcan, y = reorder(region, -median_devcan), fill = stat(x), colour = prop_devcan)) +
+  ggplot(aes(x = prop_developed_canopy, y = reorder(region, -median_devcan), fill = stat(x), colour = prop_developed_canopy)) +
   geom_density_ridges_gradient(scale = 1.67, rel_min_height = 0.01, gradient_lwd = 5) +
     scale_fill_gradient(low = "#EED5B7", high = "#228B22") +
   labs(y="",
@@ -238,14 +238,14 @@ To account for larger states with diverse biomes, we can compare a state's fores
 states_dbf %>%
   mutate(
     prop_developed = tdevelop / lndrasar,
-    prop_forest = tforest / lndrasar,
+    prop_forested = tforest / lndrasar,
     prop_us_forest = tforest / sum(tforest)
   ) %>%
-  inner_join(state_region, by = c("name00" = "state")) %>%
-  ggplot(aes(x = prop_us_forest, y = prop_forest, colour = region)) +
+  inner_join(state_region, by = c("state" = "state")) %>%
+  ggplot(aes(x = prop_us_forest, y = prop_forested, colour = region)) +
   geom_point(size = 3) +
- # gghighlight::gghighlight((prop_forest > 0.4 & prop_us_forest < 0.01) |
- #   name00 == "California") +
+ # gghighlight::gghighlight((prop_forested > 0.4 & prop_us_forest < 0.01) |
+ #   state == "California") +
   scale_colour_viridis_d() +
   labs(
     title = "Many of the heavily forested states are small",
@@ -280,14 +280,14 @@ Not surprisingly, there is a strong relationship between how forested a state is
 ```{r}
 # TODO clean up tibble logic
 lm_canopy <- states_dbf %>%
-  select(name00, prop_devcanopy, prop_forest) %>%
-  filter(prop_forest > 0.2) %>%
-  lm(data = ., prop_devcanopy ~ prop_forest)
+  select(state, prop_developed_canopy, prop_forested) %>%
+  filter(prop_forested > 0.2) %>%
+  lm(data = ., prop_developed_canopy ~ prop_forested)
 
 canopy_fitted <- broom::augment(lm_canopy, data = states_dbf %>%
-  select(name00, prop_devcanopy, prop_forest) %>%
-  filter(prop_forest > 0.2)) %>%
-  select(name00, starts_with("."))
+  select(state, prop_developed_canopy, prop_forested) %>%
+  filter(prop_forested > 0.2)) %>%
+  select(state, starts_with("."))
 ```
 
 ```{r}
@@ -295,14 +295,13 @@ canopy_fitted <- broom::augment(lm_canopy, data = states_dbf %>%
 # TODO make red more earthy
 # TODO make above average states green, below average more grey
 states_dbf %>%
-  select(name00, prop_devcanopy, prop_forest) %>%
-  left_join(canopy_fitted, by = c("name00" = "name00")) %>%
-  ggplot(aes(x = prop_forest, y = prop_devcanopy)) +
+  select(state, prop_developed_canopy, prop_forested) %>%
+  left_join(canopy_fitted, by = c("state" = "state")) %>%
+  ggplot(aes(x = prop_forested, y = prop_developed_canopy)) +
   #geom_rect(aes(xmin = 0, xmax = 0.2, ymin = 0, ymax = 0.1), alpha = 1 / 100, colour = "#EE3B3B", fill = "#EE3B3B") +
- # geom_line(aes(x = prop_forest, y = .fitted), colour = "#838B8B", linetype = "dashed") +
+  #geom_line(aes(x = prop_forested, y = .fitted), colour = "#838B8B", linetype = "dashed") +
   geom_point(size = 3) +
-  gghighlight::gghighlight(n = 1, max_highlight = 1, .resid < -0.06 | name00 == "California" | .resid > 0.08, label_key = name00) +
-
+  gghighlight::gghighlight(n = 1, max_highlight = 1, .resid < -0.06 | state == "California" | .resid > 0.08, label_key = state) +
   labs(
     title = "Several high-forested states lack greenspace on developed land",
     subtitle = "How forested a state is versus how forested their developed land is",
@@ -324,25 +323,25 @@ Let's zoom in on Maine and Georgia to see why the discrepancy between forest cov
 
 
 ga_me <- county_shp %>%
-  filter(name00 %in% c("Georgia", "Maine"))
+  filter(state %in% c("Georgia", "Maine"))
 
 gg_ga <- ga_me %>%
-  filter(name00 == "Georgia") %>%
+  filter(state == "Georgia") %>%
   ggplot() +
-  geom_sf(aes(fill = prop_forest), lwd = 0) +
+  geom_sf(aes(geometry = geometry, fill = prop_forested), lwd = 0) +
   scale_fill_gradient(low = "#EED5B7", high = "#228B22", labels = scales::percent, breaks = c(0, 0.4, 0.8)) +
   geom_sf(data = state_pop_stats %>%
-    filter(name00 == "Georgia", cumprop_pop <= 0.75), aes(alpha = log(prop_developed)),
+    filter(state == "Georgia", cumprop_pop <= 0.75), aes(geometry = geometry, alpha = log(prop_developed)),
     lwd=0, colour = "#828282") +
   guides(fill=FALSE, alpha=FALSE)
 
 gg_me <- ga_me %>%
-  filter(name00 == "Maine") %>%
+  filter(state == "Maine") %>%
   ggplot() +
-  geom_sf(aes(fill = prop_forest), lwd = 0) +
+  geom_sf(aes(geometry = geometry, fill = prop_forested), lwd = 0) +
   scale_fill_gradient(low = "#EED5B7", high = "#228B22", labels = scales::percent, breaks = c(0, 0.4, 0.8)) +
   geom_sf(data = state_pop_stats%>%
-    filter(name00 == "Maine", cumprop_pop <= 0.75), aes(alpha = log(prop_developed)),
+    filter(state == "Maine", cumprop_pop <= 0.75), aes(geometry = geometry, alpha = log(prop_developed)),
     lwd=0, colour = "#828282") +
   guides(fill=FALSE, alpha=FALSE)
 
@@ -358,14 +357,14 @@ We can see this when we drill into the counties where people actually live. For 
 # TODO county with california
 county_cali <- county_shp_raw %>%
   rename(`county` = name00) %>%
-  inner_join(states_dbf %>% select(stfips, name00), by = c("stfips"))
+  inner_join(stfips_map)
 
 
 # dist version
 # population spread in overall area of land
 # need to sum up county size
 county_stats <- county_cali %>%
-  group_by(name00) %>%
+  group_by(state) %>%
   arrange(desc(pop2000)) %>%
   mutate(
     cumsum_pop = cumsum(pop2000),
@@ -374,7 +373,7 @@ county_stats <- county_cali %>%
     cumprop_area = cumsum_area / sum(lndrasar),
     prop_develop = tdevelop / lndrasar,
   ) %>%
-  select(name00, county, cumsum_pop, cumprop_pop, cumsum_area, cumprop_area)
+  select(state, county, cumsum_pop, cumprop_pop, cumsum_area, cumprop_area)
 
 # TODO remove grid lines
 # TODO change label position to mid point
@@ -387,11 +386,11 @@ most_skewed <- county_stats %>%
   ungroup() %>%
   mutate(rank = rank(cumprop_area)) %>%
   arrange(rank) %>%
-  filter(rank == 1 | rank == 48 | rank == 24 | name00 == "California") %>%
+  filter(rank == 1 | rank == 48 | rank == 24 | state == "California") %>%
   as_tibble()
 county_stats %>%
-  left_join(most_skewed %>% select(name00, rank), by = c("name00")) %>%
-  ggplot(aes(x = cumprop_pop, y = cumprop_area, group=name00)) +
+  left_join(most_skewed %>% select(state, rank), by = c("state")) %>%
+  ggplot(aes(x = cumprop_pop, y = cumprop_area, group=state)) +
   geom_line(size = 1.25, alpha = 1/4) +
   #gghighlight::gghighlight(!is.na(rank)) +
   geom_abline(alpha = 1 / 3, linetype = "dashed") +
@@ -412,15 +411,15 @@ Knowing this fact, let's define a state's *population centers* as the counties t
 # TODO make x axis labels smaller
 # TODO filter on populated counties and show distribution
 state_devcan <- state_pop_stats_dbf %>%
-  inner_join(states_dbf %>% select(name00, prop_forest), by="name00", suffix=c("", "_state")) %>%
-  mutate(prop_devcan = devcan / tdevelop,
-         plot_label = glue::glue("{name00} ({scales::percent(prop_forest_state)})"))
-state_devcan_rank = state_devcan %>% group_by(name00) %>% summarise(mean_devcan = mean(prop_devcan, na.rm=TRUE))
+  inner_join(states_dbf %>% select(state, prop_forested), by="state", suffix=c("", "_state")) %>%
+  mutate(prop_developed_canopy = devcan / tdevelop,
+         plot_label = glue::glue("{state} ({scales::percent(prop_forested_state)})"))
+state_devcan_rank = state_devcan %>% group_by(state) %>% summarise(mean_devcan = mean(prop_developed_canopy, na.rm=TRUE))
 state_devcan %>%
   inner_join(state_devcan_rank) %>%
-  filter(name00 %in% c("Georgia", "Maine", "Connecticut", "Vermont", "Kentucky", "California", "Mississippi", "North Dakota")) %>%
-  ggplot(aes(x = prop_devcan)) +
-  ggridges::geom_density_ridges(aes(y=reorder(plot_label, prop_forest_state), fill = prop_forest_state), scale = 2) +
+  filter(state %in% c("Georgia", "Maine", "Connecticut", "Vermont", "Kentucky", "California", "Mississippi", "North Dakota")) %>%
+  ggplot(aes(x = prop_developed_canopy)) +
+  ggridges::geom_density_ridges(aes(y=reorder(plot_label, prop_forested_state), fill = prop_forested_state), scale = 2) +
   guides(fill=FALSE) +
   scale_fill_gradient(low = "#EED5B7", high = "#228B22", labels = scales::percent, breaks = c(0, 0.4, 0.8)) +
   labs(y="",
@@ -462,13 +461,13 @@ On the urban forest front, many California suburbs lack greenspace, particularly
 
 ```{r}
 cali <- county_shp %>%
-  filter(name00 %in% c("California")) %>%
-  group_by(name00) %>%
+  filter(state %in% c("California")) %>%
+  group_by(state) %>%
   mutate(
     prop_develop = tdevelop / lndrasar,
-    prop_forest = tforest / lndrasar
+    prop_forested = tforest / lndrasar
   ) %>%
-  mutate(prop_develop = if_else(prop_develop < 0.05 | name00 != "California", NA_real_, prop_develop)) %>%
+  mutate(prop_develop = if_else(prop_develop < 0.05 | state != "California", NA_real_, prop_develop)) %>%
   ungroup()
 ```
 
@@ -479,23 +478,22 @@ We can see this when we look at California's population centers and where its fo
 # TODO add labelso of major cities
 # TODO make fill legend text smaller and remove plot border
 state_pop_stats %>%
-  filter(name00 == "California") %>%
-  select(county, pop2000, cumsum_pop, cumprop_pop, populated, prop_forest, popden00) %>%
-  ggplot() +
-  geom_sf(aes(fill = prop_forest), lwd = 0) +
+  filter(state == "California") %>%
+  ggplot(aes(geometry = geometry)) +
+  geom_sf(aes(fill = prop_forested), lwd = 0) +
   scale_fill_gradient(low = "#EED5B7", high = "#228B22", labels = scales::percent, breaks = c(0, 0.4, 0.8)) +
   geom_sf(data = state_pop_stats %>%
-    filter(name00 == "California", cumprop_pop <= 0.75), lwd=0, alpha = 3 / 5, fill = "#8A8A8A", colour = "#828282") +
+    filter(state == "California", cumprop_pop <= 0.75), lwd=0, alpha = 3 / 5, fill = "#8A8A8A", colour = "#828282") +
   labs(
     title = "California forests are far from population centers",
     subtitle = "Forest coverage compared to population centers (grey)"
   ) +
-  geom_sf(data = states_shp %>% filter(name00 %in% c("Oregon", "Nevada", "Arizona", "Idaho", "Utah"))) +
+  geom_sf(data = states_shp %>% filter(state %in% c("Oregon", "Nevada", "Arizona", "Idaho", "Utah"))) +
   # thick california border
-  geom_sf(data = states_shp %>% filter(name00 == "California"), lwd=1.2, alpha=0) +
+  geom_sf(data = states_shp %>% filter(state == "California"), lwd=1.2, alpha=0) +
   coord_sf(
     crs = st_crs(4267),
-    xlim = c(-127, -113), ylim = c(32, 43), expand = FALSE
+    xlim = c(-125.5, -113), ylim = c(32, 43), expand = FALSE
   ) +
   theme(
     panel.background = element_rect(fill = "aliceblue"),
